@@ -5,36 +5,82 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.time.LocalTime
 
 class ChargingReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_POWER_CONNECTED) return
+    private var previousPlugged: Int? = null
 
-        val chargingType = currentChargingType(context) ?: return
-        val currentMinutes = LocalTime.now().hour * 60 + LocalTime.now().minute
+    override fun onReceive(context: Context, intent: Intent) {
+        Log.d(
+            "Switcheroo",
+            "Battery event received: action=${intent.action}"
+        )
+        if (intent.action != Intent.ACTION_BATTERY_CHANGED) return
+
+        val plugged = intent.getIntExtra(
+            BatteryManager.EXTRA_PLUGGED,
+            0
+        )
+
+        val previous = previousPlugged
+        previousPlugged = plugged
+
+        if (previous == null) return
+        if (previous != 0 || plugged == 0) return
+
+        val chargingType = when (plugged) {
+            BatteryManager.BATTERY_PLUGGED_WIRELESS ->
+                ChargingTrigger.WIRELESS
+
+            BatteryManager.BATTERY_PLUGGED_AC,
+            BatteryManager.BATTERY_PLUGGED_USB,
+            BatteryManager.BATTERY_PLUGGED_DOCK ->
+                ChargingTrigger.WIRED
+
+            else -> return
+        }
+
+        val currentMinutes =
+            LocalTime.now().hour * 60 + LocalTime.now().minute
+
         val matchingTasks = LightsOutTaskStore.load(context).filter { task ->
             task.enabled &&
-                task.matches(chargingType) &&
-                isInsideWindow(currentMinutes, task.startMinutes, task.endMinutes)
+                    task.matches(chargingType) &&
+                    isInsideWindow(
+                        currentMinutes,
+                        task.startMinutes,
+                        task.endMinutes
+                    )
         }
 
         if (matchingTasks.isEmpty()) return
 
         val pendingResult = goAsync()
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val apiKey = context.getSharedPreferences("switcheroo", Context.MODE_PRIVATE)
-                    .getString("govee_api_key", "")
+                val apiKey = context
+                    .getSharedPreferences(
+                        "switcheroo",
+                        Context.MODE_PRIVATE
+                    )
+                    .getString(
+                        "govee_api_key",
+                        ""
+                    )
                     .orEmpty()
+
                 if (apiKey.isBlank()) return@launch
 
                 matchingTasks.forEach { task ->
-                    val device = DeviceStateSync.getDevice(context, task.deviceId)
-                        ?: return@forEach
+                    val device = DeviceStateSync.getDevice(
+                        context,
+                        task.deviceId
+                    ) ?: return@forEach
 
                     try {
                         GoveeRepository().setPower(
@@ -43,11 +89,19 @@ class ChargingReceiver : BroadcastReceiver() {
                             enabled = false
                         )
 
-                        if (DeviceStateSync.savePowerState(context, device, false)) {
-                            WidgetGlanceState.syncDevice(context, device.deviceId)
+                        if (
+                            DeviceStateSync.savePowerState(
+                                context,
+                                device,
+                                false
+                            )
+                        ) {
+                            WidgetGlanceState.syncDevice(
+                                context,
+                                device.deviceId
+                            )
                         }
                     } catch (_: Exception) {
-                        // One failed task must not prevent the remaining tasks from running.
                     }
                 }
             } finally {
@@ -56,23 +110,11 @@ class ChargingReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun currentChargingType(context: Context): ChargingTrigger? {
-        val batteryIntent = context.registerReceiver(
-            null,
-            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        ) ?: return null
-
-        return when (batteryIntent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)) {
-            BatteryManager.BATTERY_PLUGGED_WIRELESS -> ChargingTrigger.WIRELESS
-            BatteryManager.BATTERY_PLUGGED_AC,
-            BatteryManager.BATTERY_PLUGGED_USB,
-            BatteryManager.BATTERY_PLUGGED_DOCK -> ChargingTrigger.WIRED
-            else -> null
-        }
-    }
-
-    private fun LightsOutTask.matches(actual: ChargingTrigger): Boolean {
-        return chargingTrigger == ChargingTrigger.EITHER || chargingTrigger == actual
+    private fun LightsOutTask.matches(
+        actual: ChargingTrigger
+    ): Boolean {
+        return chargingTrigger == ChargingTrigger.EITHER ||
+                chargingTrigger == actual
     }
 
     private fun isInsideWindow(
@@ -83,9 +125,11 @@ class ChargingReceiver : BroadcastReceiver() {
         if (startMinutes == endMinutes) return true
 
         return if (startMinutes < endMinutes) {
-            currentMinutes >= startMinutes && currentMinutes < endMinutes
+            currentMinutes >= startMinutes &&
+                    currentMinutes < endMinutes
         } else {
-            currentMinutes >= startMinutes || currentMinutes < endMinutes
+            currentMinutes >= startMinutes ||
+                    currentMinutes < endMinutes
         }
     }
 }

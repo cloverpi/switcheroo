@@ -45,10 +45,7 @@ class LightsOutMonitorService : Service() {
     private fun registerChargingReceiver() {
         if (receiverRegistered) return
 
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_POWER_CONNECTED)
-            addAction(Intent.ACTION_POWER_DISCONNECTED)
-        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(
